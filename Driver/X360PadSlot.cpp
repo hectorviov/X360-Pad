@@ -20,10 +20,11 @@ struct X360PadSlot_IVars {
     IOBufferMemoryDescriptor * outBuf;   // the command in flight
     OSAction * readAction;
     OSAction * writeAction;
-    IOLock * lock;                       // the command queue: the gamepad's queue and this one both send
+    IOLock * lock;                       // the settings and the app's state (never held across a call into the kernel)
     bool writing;
     uint8_t pending[3][12];              // rumble, LED, presence query waiting to be sent (latest wins)
     bool hasPending[3];
+    IODispatchQueue * queue;             // this service's own queue: the command queue lives on it
     IOTimerDispatchSource * holdTimer;   // the motors' minimum time on
     OSAction * holdAction;
     uint64_t holdUntil;                  // mach time before which a stop is deferred
@@ -53,6 +54,7 @@ void X360PadSlot::free() {
         OSSafeReleaseNULL(ivars->writeAction);
         OSSafeReleaseNULL(ivars->holdAction);
         OSSafeReleaseNULL(ivars->holdTimer);
+        OSSafeReleaseNULL(ivars->queue);
         if (ivars->lock) IOLockFree(ivars->lock);
         OSSafeReleaseNULL(ivars->inBuf);
         OSSafeReleaseNULL(ivars->outBuf);
@@ -72,13 +74,23 @@ static int command_kind(const uint8_t * c) {   // 0 rumble, 1 LED or power off (
     return 2;
 }
 
-// Starts the next waiting command if none is in flight; called with the lock held. Returns the result of queueing it.
+// The command queue (pending, writing, the motors' hold) is only touched on this service's own dispatch queue, where WriteComplete and HoldEnded
+// already run, so no lock is ever held across a call into the kernel (AsyncIO, WakeAtTime): holding the lock across AsyncIO while the queue
+// waited for it to deliver a completion deadlocked a slot after a sleep and wake (2026-11-08). The lock only guards the settings and the state
+// the app reads, and is held for copies.
+struct x360_cmd { uint8_t b[12]; };
+
+// Starts the next waiting command if none is in flight. On the service's queue.
 static kern_return_t start_next(X360PadSlot_IVars * ivars) {
     if (ivars->writing || ivars->stopping || !ivars->out) return kIOReturnSuccess;
     for (int k = 0; k < 3; k++) {
         if (!ivars->hasPending[k]) continue;
         ivars->hasPending[k] = false;
-        if (k == 0) { ivars->motors[0] = ivars->pending[0][5]; ivars->motors[1] = ivars->pending[0][6]; }   // what the motors get, for the app
+        if (k == 0) {   // what the motors get, for the app
+            IOLockLock(ivars->lock);
+            ivars->motors[0] = ivars->pending[0][5]; ivars->motors[1] = ivars->pending[0][6];
+            IOLockUnlock(ivars->lock);
+        }
         IOAddressSegment range = {};
         ivars->outBuf->GetAddressRange(&range);
         memcpy((void *)range.address, ivars->pending[k], 12);
@@ -91,59 +103,59 @@ static kern_return_t start_next(X360PadSlot_IVars * ivars) {
 }
 
 // Games' rumble effects can be a frame or two long, shorter than a 360 controller's motors take to spin up, so once on they stay on at least the
-// settings' motorHoldMs before a stop is honoured (mach time is 24 MHz); a new start extends it
-
-kern_return_t X360PadSlot::SendCommand(const uint8_t * command) {
-    if (!ivars->out || ivars->stopping) return kIOReturnNotOpen;
-    IOLockLock(ivars->lock);
+// settings' motorHoldMs before a stop is honoured (mach time is 24 MHz); a new start extends it. On the service's queue.
+static void enqueue(X360PadSlot * self, X360PadSlot_IVars * ivars, const uint8_t * command, uint32_t holdMs) {
+    if (ivars->stopping || !ivars->out) return;
     int k = command_kind(command);
     if (k == 0) {
         uint64_t now = mach_absolute_time();
         bool on = command[5] || command[6];
-        if (on) { ivars->holdUntil = now + (uint64_t)ivars->settings.motorHoldMs * 24000ull; ivars->hasDeferredStop = false; }
+        if (on) { ivars->holdUntil = now + (uint64_t)holdMs * 24000ull; ivars->hasDeferredStop = false; }
         else if (now < ivars->holdUntil && ivars->holdTimer) {   // stop later, when the hold ends
             memcpy(ivars->deferredStop, command, 12);
             ivars->hasDeferredStop = true;
-            uint64_t until = ivars->holdUntil;
-            IOLockUnlock(ivars->lock);
-            ivars->holdTimer->WakeAtTime(kIOTimerClockMachAbsoluteTime, until, 0);
-            return kIOReturnSuccess;
+            ivars->holdTimer->WakeAtTime(kIOTimerClockMachAbsoluteTime, ivars->holdUntil, 0);
+            return;
         }
     }
     memcpy(ivars->pending[k], command, 12);
     ivars->hasPending[k] = true;
     kern_return_t ret = start_next(ivars);
+    if (ret != kIOReturnSuccess) { x360_status(self, "command", ret); os_log(OS_LOG_DEFAULT, "x360pad: slot %d: command not queued (0x%x)", ivars->slot + 1, ret); }
+}
+
+kern_return_t X360PadSlot::SendCommand(const uint8_t * command) {
+    if (!ivars->out || ivars->stopping || !ivars->queue) return kIOReturnNotOpen;
+    x360_cmd c;
+    memcpy(c.b, command, 12);
+    IOLockLock(ivars->lock);
+    uint32_t holdMs = ivars->settings.motorHoldMs;
     IOLockUnlock(ivars->lock);
-    if (ret != kIOReturnSuccess) { x360_status(this, "command", ret); LOG("command not queued (0x%x)", ret); }
-    return ret;
+    X360PadSlot_IVars * iv = ivars;
+    retain();   // until the block has run
+    ivars->queue->DispatchAsync(^{ enqueue(this, iv, c.b, holdMs); release(); });
+    return kIOReturnSuccess;
 }
 
 void IMPL(X360PadSlot, HoldEnded) {
     (void)action; (void)time;
-    IOLockLock(ivars->lock);
-    kern_return_t ret = kIOReturnSuccess;
-    if (ivars->hasDeferredStop) {
-        uint64_t now = mach_absolute_time();
-        if (now + 24000 >= ivars->holdUntil) {   // the hold is over (a new start would have cleared the deferred stop)
-            memcpy(ivars->pending[0], ivars->deferredStop, 12);
-            ivars->hasPending[0] = true;
-            ivars->hasDeferredStop = false;
-            ret = start_next(ivars);
-        }
+    if (!ivars->hasDeferredStop || ivars->stopping) return;
+    if (mach_absolute_time() + 24000 < ivars->holdUntil) {   // extended by a new start: wait for the new end
+        ivars->holdTimer->WakeAtTime(kIOTimerClockMachAbsoluteTime, ivars->holdUntil, 0);
+        return;
     }
-    uint64_t until = ivars->hasDeferredStop ? ivars->holdUntil : 0;
-    IOLockUnlock(ivars->lock);
-    if (until && ivars->holdTimer) ivars->holdTimer->WakeAtTime(kIOTimerClockMachAbsoluteTime, until, 0);
+    memcpy(ivars->pending[0], ivars->deferredStop, 12);
+    ivars->hasPending[0] = true;
+    ivars->hasDeferredStop = false;
+    kern_return_t ret = start_next(ivars);
     if (ret != kIOReturnSuccess) LOG("command not queued (0x%x)", ret);
 }
 
 void IMPL(X360PadSlot, WriteComplete) {
     (void)action; (void)completionTimestamp; (void)actualByteCount;
     if (status != kIOReturnSuccess && status != kIOReturnAborted) x360_status(this, "command", status);
-    IOLockLock(ivars->lock);
     ivars->writing = false;
     kern_return_t ret = status == kIOReturnAborted ? kIOReturnSuccess : start_next(ivars);
-    IOLockUnlock(ivars->lock);
     if (ret != kIOReturnSuccess) LOG("command not queued (0x%x)", ret);
 }
 
@@ -176,19 +188,19 @@ void X360PadSlot::GetState(void * state) {
 }
 
 kern_return_t X360PadSlot::TestRumble(uint8_t strong, uint8_t weak, uint32_t ms) {
-    if (!ivars->holdTimer) return kIOReturnNotReady;
-    uint8_t cmd[12];
-    x360w_rumble(cmd, strong, weak);
-    kern_return_t ret = SendCommand(cmd);
-    if (ret != kIOReturnSuccess) return ret;
-    IOLockLock(ivars->lock);   // the stop, after ms: through the motors' hold
-    uint64_t until = mach_absolute_time() + (uint64_t)ms * 24000ull;
-    if (until > ivars->holdUntil) ivars->holdUntil = until;
-    x360w_rumble(ivars->deferredStop, 0, 0);
-    ivars->hasDeferredStop = true;
-    until = ivars->holdUntil;
-    IOLockUnlock(ivars->lock);
-    return ivars->holdTimer->WakeAtTime(kIOTimerClockMachAbsoluteTime, until, 0);
+    if (!ivars->holdTimer || !ivars->queue || ivars->stopping) return kIOReturnNotReady;
+    x360_cmd on;
+    x360w_rumble(on.b, strong, weak);
+    X360PadSlot_IVars * iv = ivars;
+    retain();
+    ivars->queue->DispatchAsync(^{   // on, then the stop after ms through the motors' hold
+        enqueue(this, iv, on.b, ms);
+        x360w_rumble(iv->deferredStop, 0, 0);
+        iv->hasDeferredStop = true;
+        if (iv->holdTimer && !iv->stopping) iv->holdTimer->WakeAtTime(kIOTimerClockMachAbsoluteTime, iv->holdUntil, 0);
+        release();
+    });
+    return kIOReturnSuccess;
 }
 
 kern_return_t IMPL(X360PadSlot, NewUserClient) {
@@ -264,13 +276,11 @@ kern_return_t IMPL(X360PadSlot, Start) {
     if (ret == kIOReturnSuccess) ret = CreateActionReadComplete(0, &ivars->readAction);
     if (ret == kIOReturnSuccess) ret = CreateActionWriteComplete(0, &ivars->writeAction);
     if (ret == kIOReturnSuccess) {   // the motors' hold timer, on this service's queue
-        IODispatchQueue * queue = nullptr;
-        ret = CopyDispatchQueue(kIOServiceDefaultQueueName, &queue);
-        if (ret == kIOReturnSuccess) ret = IOTimerDispatchSource::Create(queue, &ivars->holdTimer);
+        ret = CopyDispatchQueue(kIOServiceDefaultQueueName, &ivars->queue);
+        if (ret == kIOReturnSuccess) ret = IOTimerDispatchSource::Create(ivars->queue, &ivars->holdTimer);
         if (ret == kIOReturnSuccess) ret = CreateActionHoldEnded(0, &ivars->holdAction);
         if (ret == kIOReturnSuccess) ret = ivars->holdTimer->SetHandler(ivars->holdAction);
         if (ret == kIOReturnSuccess) ret = ivars->holdTimer->SetEnable(true);
-        OSSafeReleaseNULL(queue);
     }
     if (ret != kIOReturnSuccess) FAIL("buffers", ret);
 

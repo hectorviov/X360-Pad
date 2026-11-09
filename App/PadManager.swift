@@ -16,6 +16,7 @@ final class SlotModel: ObservableObject, Identifiable {
 
     @Published private(set) var attached = false    // the driver's service for this slot is open
     @Published private(set) var connected = false   // a controller is on in this slot
+    @Published private(set) var notResponding = false   // the driver has not answered this slot for over a second
     @Published var settings: PadSettings {
         didSet {
             guard settings != oldValue else { return }
@@ -47,13 +48,17 @@ final class SlotModel: ObservableObject, Identifiable {
     /// Sends the settings to the driver.
     fileprivate func push() {
         guard attached, let manager else { return }
-        let r = manager.driver.setSettings(settings.driverSettingsData, forSlot: index)
-        if r != 0 { log.error("slot \(self.index + 1, privacy: .public): settings not sent (0x\(String(UInt32(bitPattern: r), radix: 16), privacy: .public))") }
+        manager.driver.setSettings(settings.driverSettingsData, forSlot: index)
     }
 
     fileprivate func setAttached(_ on: Bool) {
         attached = on
+        notResponding = false
         if on { push() } else { update(nil) }
+    }
+
+    fileprivate func setResponding(_ on: Bool) {
+        if notResponding == on { notResponding = !on }
     }
 
     fileprivate func update(_ state: x360_state?) {
@@ -71,17 +76,14 @@ final class SlotModel: ObservableObject, Identifiable {
 
     /// Turns this slot's controller off (no need to take its batteries out).
     func powerOff() {
-        guard let manager else { return }
-        let r = manager.driver.powerOffSlot(index)
-        if r != 0 { log.error("slot \(self.index + 1, privacy: .public): power off not sent (0x\(String(UInt32(bitPattern: r), radix: 16), privacy: .public))") }
+        manager?.driver.powerOffSlot(index)
     }
 
     /// Half a second of both motors as a game's strong request would get them (the slot's gain, swap and floor), to feel the setting.
     func testRumble() {
         guard let manager else { return }
         let (a, b) = settings.motorLevels(strong: 200, weak: 200)
-        let r = manager.driver.testRumbleStrong(a, weak: b, milliseconds: 500, forSlot: index)
-        if r != 0 { log.error("slot \(self.index + 1, privacy: .public): test rumble not sent (0x\(String(UInt32(bitPattern: r), radix: 16), privacy: .public))") }
+        manager.driver.testRumbleStrong(a, weak: b, milliseconds: 500, forSlot: index)
     }
 }
 
@@ -110,10 +112,17 @@ final class PadManager: NSObject, ObservableObject, X360DriverDelegate {
 
     var receiverConnected: Bool { !attachedSlots.isEmpty }
 
+    /// Asks each slot's driver for its state, off the main thread (X360Driver); the replies come back here.
     private func poll() {
         for s in slots where s.attached {
-            if let data = driver.state(forSlot: s.index), data.count == MemoryLayout<x360_state>.size {
-                s.update(data.withUnsafeBytes { $0.loadUnaligned(as: x360_state.self) })
+            driver.pollSlot(s.index) { [weak s] data, responding in
+                MainActor.assumeIsolated {
+                    guard let s, s.attached else { return }
+                    s.setResponding(responding)
+                    if let data, data.count == MemoryLayout<x360_state>.size {
+                        s.update(data.withUnsafeBytes { $0.loadUnaligned(as: x360_state.self) })
+                    }
+                }
             }
         }
     }

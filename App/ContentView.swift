@@ -82,7 +82,7 @@ private struct SlotDot: View {
     @ObservedObject var slot: SlotModel
     var body: some View {
         Circle()
-            .fill(slot.connected ? Color.green : Color.secondary.opacity(0.3))
+            .fill(slot.notResponding ? Color.orange : slot.connected ? Color.green : Color.secondary.opacity(0.3))
             .frame(width: 8, height: 8)
             .help("Controller \(slot.index + 1): \(slot.connected ? "on" : "off")")
     }
@@ -96,7 +96,10 @@ private struct SlotView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if slot.attached && !slot.connected {
+            if slot.notResponding {
+                Label("The driver is not answering for controller \(slot.index + 1). Unplug the receiver and plug it back in.", systemImage: "exclamationmark.triangle")
+                    .font(.callout).foregroundStyle(.orange)
+            } else if slot.attached && !slot.connected {
                 Text("Turn on a controller: it takes quadrant \(slot.index + 1) on its ring.").font(.callout).foregroundStyle(.secondary)
             }
 
