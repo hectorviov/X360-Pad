@@ -1,4 +1,5 @@
-# X360 Pad
+<p align="center"><img src="Design/AppIcon-1024.png" alt="X360 Pad icon" width="160"></p>
+<h1 align="center">X360 Pad</h1>
 
 A macOS driver and menu-bar app for the original **Xbox 360 wireless controller** with Microsoft's
 **Wireless Gaming Receiver** (USB `045e:0291` / `0719` / `02a9`). Each controller that turns on
