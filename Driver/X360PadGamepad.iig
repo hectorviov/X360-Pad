@@ -1,0 +1,28 @@
+// The HID gamepad a slot publishes while its controller is on: a DualShock 4 (DualShock4Wire.h), the identity GameController accepts from a driver
+// and sends HID rumble to.
+#ifndef X360PadGamepad_h
+#define X360PadGamepad_h
+
+#include <Availability.h>
+#include <DriverKit/IOService.iig>
+#include <HIDDriverKit/IOUserHIDDevice.iig>
+
+class X360PadGamepad: public IOUserHIDDevice
+{
+public:
+    virtual bool init() override;
+    virtual void free() override;
+    virtual kern_return_t Start(IOService * provider) override;
+    virtual bool handleStart(IOService * provider) override;
+    virtual OSDictionary * newDeviceDescription() override;
+    virtual OSData * newReportDescriptor() override;
+    virtual kern_return_t getReport(IOMemoryDescriptor * report, IOHIDReportType reportType, IOOptionBits options, uint32_t completionTimeout,
+                                    OSAction * action) override;
+    virtual kern_return_t setReport(IOMemoryDescriptor * report, IOHIDReportType reportType, IOOptionBits options, uint32_t completionTimeout,
+                                    OSAction * action) override;
+
+    /// Posts one 20-byte wired-controller input report (the settings applied); clickLevel is the trigger travel that presses L2 / R2.
+    kern_return_t PostInput(const uint8_t * report, uint32_t length, uint8_t clickLevel) LOCALONLY;
+};
+
+#endif

@@ -1,0 +1,15 @@
+// The receiver itself: a vendor-class USB device (class FF), for which macOS sets no configuration, so its controller slots (interfaces) do not exist
+// until a driver sets one. This sets configuration 1 and lets the interfaces match X360PadSlot, as macOS's XboxGamepad.dext does for its devices.
+#ifndef X360PadDevice_h
+#define X360PadDevice_h
+
+#include <Availability.h>
+#include <DriverKit/IOService.iig>
+
+class X360PadDevice: public IOService
+{
+public:
+    virtual kern_return_t Start(IOService * provider) override;
+};
+
+#endif

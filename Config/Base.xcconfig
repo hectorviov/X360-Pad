@@ -1,0 +1,3 @@
+// Settings for both targets. Your Apple developer team goes in Config/Local.xcconfig (not in git), included here when it exists:
+//   cp Config/Local.xcconfig.example Config/Local.xcconfig   and set DEVELOPMENT_TEAM to your team ID
+#include? "Local.xcconfig"

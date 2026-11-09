@@ -1,0 +1,71 @@
+# Generate the Xcode project with `xcodegen` (brew install xcodegen); X360Pad.xcodeproj is not kept in git.
+name: X360Pad
+options:
+  bundleIdPrefix: com.hectorviov
+  deploymentTarget:
+    macOS: "15.0"
+packages:
+  X360PadCore:
+    path: .
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.3.0"
+    CURRENT_PROJECT_VERSION: "21"
+    CODE_SIGN_STYLE: Automatic
+targets:
+  X360Pad:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+    dependencies:
+      - package: X360PadCore
+      - target: X360PadDriver
+        embed: true
+      - sdk: IOKit.framework
+      - sdk: SystemExtensions.framework
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: X360 Pad
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSUIElement: true
+        LSApplicationCategoryType: public.app-category.utilities
+        NSHumanReadableCopyright: "Copyright © 2026 Hector Villarreal. MIT License."
+    entitlements:
+      path: App/X360Pad.entitlements
+      properties:
+        com.apple.developer.system-extension.install: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hectorviov.x360pad
+        PRODUCT_NAME: X360 Pad
+        ENABLE_HARDENED_RUNTIME: YES
+        SWIFT_OBJC_BRIDGING_HEADER: App/X360Pad-Bridging-Header.h
+        GENERATE_INFOPLIST_FILE: NO
+        ENABLE_APP_SANDBOX: NO
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
+  X360PadDriver:
+    type: driver-extension
+    platform: macOS
+    productName: com.hectorviov.x360pad.driver
+    sources:
+      - path: Driver
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hectorviov.x360pad.driver
+        PRODUCT_NAME: com.hectorviov.x360pad.driver
+        INFOPLIST_FILE: Driver/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Driver/X360PadDriver.entitlements
+        ENABLE_APP_SANDBOX: YES
+        GENERATE_INFOPLIST_FILE: NO
+        SDKROOT: driverkit
+        SUPPORTED_PLATFORMS: driverkit
+        ARCHS: arm64e
+        OTHER_LDFLAGS: "-framework DriverKit -framework USBDriverKit -framework HIDDriverKit"
+        DRIVERKIT_DEPLOYMENT_TARGET: "24.0"

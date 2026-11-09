@@ -1,0 +1,13 @@
+Attributions
+============
+
+- x360w (MIT, Copyright (c) 2026 古董修复师): the idea of reading the receiver outside the kernel and
+  presenting each controller as a PlayStation controller so GameController accepts it.
+- nxnative (dm/host/pad_x360_mac.h): the receiver reader the first version of this app ported.
+- Linux drivers/input/joystick/xpad.c: the receiver's wire format and commands (protocol facts only).
+- Linux drivers/hid/hid-sony.c (v4.9, dualshock4_usb_rdesc): the DualShock 4 USB report descriptor
+  bytes in Driver/DualShock4Wire.h (the device's own descriptor with its motion sensors' usages
+  named; hardware data). Linux drivers/hid/hid-playstation.c: the DualShock 4 report layouts
+  (hardware facts only).
+- github.com/leetrout/macgip: the notes that a DriverKit gamepad driver loads with development
+  signing and how GameController classifies it.

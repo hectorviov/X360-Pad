@@ -1,0 +1,42 @@
+// One controller slot of the Xbox 360 Wireless Gaming Receiver (its vendor interface): reads the slot, and while a controller is on publishes it as a
+// wired Xbox 360 gamepad (X360PadGamepad), whose rumble comes back here as receiver commands.
+#ifndef X360PadSlot_h
+#define X360PadSlot_h
+
+#include <Availability.h>
+#include <DriverKit/IOService.iig>
+#include <USBDriverKit/IOUSBHostPipe.iig>
+#include <DriverKit/IOTimerDispatchSource.iig>
+
+class X360PadSlot: public IOService
+{
+public:
+    virtual bool init() override;
+    virtual void free() override;
+    virtual kern_return_t Start(IOService * provider) override;
+    virtual kern_return_t Stop(IOService * provider) override;
+    virtual kern_return_t NewUserClient(uint32_t type, IOUserClient ** userClient) override;
+
+    /// Queues a 12-byte command for the receiver slot (in the driver's process; the gamepad calls it for rumble). Never blocks: one command is in
+    /// flight at a time, and a newer command of the same kind (rumble, LED, presence query) replaces one still waiting, as Linux's xpad queues them.
+    kern_return_t SendCommand(const uint8_t * command) LOCALONLY;
+    /// A game's motor request: the slot's gain, swap and floor applied, then queued (the gamepad calls it).
+    kern_return_t Rumble(uint8_t strong, uint8_t weak) LOCALONLY;
+    /// The app's settings for this slot (X360Settings.h), applied from the next report on.
+    void SetSettings(const void * settings) LOCALONLY;
+    /// The slot's live state for the app's window (an x360_state).
+    void GetState(void * state) LOCALONLY;
+    /// Turns the motors at the given levels (no gain or floor) for ms milliseconds.
+    kern_return_t TestRumble(uint8_t strong, uint8_t weak, uint32_t ms) LOCALONLY;
+    /// The slot number (0..3), as the ring's quadrant.
+    uint8_t SlotNumber() LOCALONLY;
+
+protected:
+    virtual void HoldEnded(OSAction * action, uint64_t time) TYPE(IOTimerDispatchSource::TimerOccurred);
+    virtual void WriteComplete(OSAction * action, IOReturn status, uint32_t actualByteCount, uint64_t completionTimestamp)
+        TYPE(IOUSBHostPipe::CompleteAsyncIO);
+    virtual void ReadComplete(OSAction * action, IOReturn status, uint32_t actualByteCount, uint64_t completionTimestamp)
+        TYPE(IOUSBHostPipe::CompleteAsyncIO);
+};
+
+#endif
