@@ -45,6 +45,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.hectorviov.x360pad
         PRODUCT_NAME: X360 Pad
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_HARDENED_RUNTIME: YES
         SWIFT_OBJC_BRIDGING_HEADER: App/X360Pad-Bridging-Header.h
         GENERATE_INFOPLIST_FILE: NO

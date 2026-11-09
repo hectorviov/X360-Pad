@@ -40,6 +40,7 @@ returns `kIOReturnNotPermitted` even with `com.apple.developer.hid.virtual.devic
 | `Driver/X360Wire.h` | the receiver's reports and commands |
 | `App/` | the menu-bar app: installs the driver, keeps each slot's settings, sends them, shows live state |
 | `Sources/X360PadCore` | the settings model (Swift) |
+| `Design/` | the app icon's source (`AppIcon.figcraft`, FigCraft) and its 1024 px export; `App/Assets.xcassets` holds the sizes |
 | `tools/` | `test_settings.c` (unit tests), `gccheck.swift` (what GameController sees), `ds4rumble.c` (rumble straight to the driver) |
 
 ## Requirements
